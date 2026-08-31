@@ -427,6 +427,35 @@ let tokenClient = null;
 let accessToken = null;
 let inboxCache = [];
 
+const TOKEN_STORAGE_KEY = 'daybook_google_token_v1';
+
+function saveToken(resp){
+  try{
+    const expiresInMs = (resp.expires_in ? Number(resp.expires_in) : 3600) * 1000;
+    localStorage.setItem(TOKEN_STORAGE_KEY, JSON.stringify({
+      token: resp.access_token,
+      expiresAt: Date.now() + expiresInMs
+    }));
+  }catch(e){}
+}
+
+function loadStoredToken(){
+  try{
+    const raw = localStorage.getItem(TOKEN_STORAGE_KEY);
+    if(!raw) return null;
+    const data = JSON.parse(raw);
+    // 60-second safety buffer before actual expiry
+    if(data && data.token && data.expiresAt && Date.now() < data.expiresAt - 60000){
+      return data.token;
+    }
+  }catch(e){}
+  return null;
+}
+
+function clearStoredToken(){
+  try{ localStorage.removeItem(TOKEN_STORAGE_KEY); }catch(e){}
+}
+
 function onGisLoaded(){
   if(GOOGLE_CLIENT_ID.indexOf("YOUR_CLIENT_ID_HERE") === 0){
     showConnectError("This app hasn't been configured yet — open index.html and paste your Google OAuth Client ID into GOOGLE_CLIENT_ID (see SETUP.md).");
@@ -437,11 +466,39 @@ function onGisLoaded(){
     scope: SCOPES,
     callback: (resp) => {
       document.getElementById('connectLoading').classList.remove('show');
-      if(resp.error){ showConnectError("Google sign-in failed: " + resp.error); return; }
+      if(resp.error){
+        // A silent, background attempt failing is not a real error the
+        // person needs to see — just leave the Connect screen showing.
+        if(resp.error !== 'immediate_failed' && resp.error !== 'popup_closed' && resp.error !== 'access_denied'){
+          showConnectError("Google sign-in failed: " + resp.error);
+        }
+        return;
+      }
       accessToken = resp.access_token;
+      saveToken(resp);
       onSignedIn();
     }
   });
+
+  // 1) If we already have a still-valid cached token from earlier today,
+  //    skip the Connect screen entirely.
+  const cached = loadStoredToken();
+  if(cached){
+    accessToken = cached;
+    onSignedIn();
+    return;
+  }
+
+  // 2) Otherwise, try a silent background reconnect (no popup/prompt) in
+  //    case this browser already has a Google session and previously
+  //    granted consent. If it can't do this quietly, it fails silently
+  //    and the person just sees the normal Connect button — no harm done.
+  //    (Note: iOS Safari's tracking prevention sometimes blocks this
+  //    silent path, so it won't work every time — the manual Connect
+  //    button is always there as a fallback.)
+  try{
+    tokenClient.requestAccessToken({ prompt: '' });
+  }catch(e){}
 }
 
 function showConnectError(msg){
@@ -465,9 +522,23 @@ function signOut(){
     google.accounts.oauth2.revoke(accessToken, () => {});
   }
   accessToken = null;
+  clearStoredToken();
   document.getElementById('appShell').style.display = 'none';
   document.getElementById('connectScreen').style.display = 'flex';
   document.getElementById('connectScreen').style.flexDirection = 'column';
+}
+
+// Call this if any Google API request comes back with a 401 — the
+// cached token has gone stale mid-session (e.g. it was revoked, or the
+// hour ran out while the app was open). Clears the bad token and drops
+// back to the Connect screen instead of silently failing.
+function handleAuthExpired(){
+  accessToken = null;
+  clearStoredToken();
+  document.getElementById('appShell').style.display = 'none';
+  document.getElementById('connectScreen').style.display = 'flex';
+  document.getElementById('connectScreen').style.flexDirection = 'column';
+  showConnectError("Your Google session expired — please connect again.");
 }
 
 function onSignedIn(){
@@ -496,6 +567,7 @@ async function loadCalendar(){
     const res = await fetch("https://www.googleapis.com/calendar/v3/calendars/primary/events?" + params, {
       headers: { Authorization: "Bearer " + accessToken }
     });
+    if(res.status === 401){ handleAuthExpired(); return []; }
     if(!res.ok) throw new Error("Calendar API " + res.status);
     const data = await res.json();
     const events = data.items || [];
@@ -553,6 +625,7 @@ async function loadGmail(){
     const listRes = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=8&labelIds=INBOX", {
       headers: { Authorization: "Bearer " + accessToken }
     });
+    if(listRes.status === 401){ handleAuthExpired(); return; }
     if(!listRes.ok) throw new Error("Gmail API " + listRes.status);
     const listData = await listRes.json();
     const ids = (listData.messages || []).map(m => m.id);
