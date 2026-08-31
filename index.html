@@ -46,6 +46,27 @@
   }
   .statusbar{height:34px;background:var(--ink);display:flex;align-items:center;justify-content:space-between;padding:0 22px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#F7F5F0;letter-spacing:.02em;}
 
+  /* ---------- Real installed app on an iPhone ----------
+     The styles above draw a little "phone mockup" (dark border, rounded
+     corners, fake status bar) so this looks good previewed inside an
+     ordinary browser window. Once it's actually installed and opened
+     full-screen from the Home Screen icon, none of that mockup chrome
+     is wanted — the app should fill the real screen edge to edge, and
+     iOS already draws its own real status bar up top. This override
+     only kicks in when running installed/full-screen. */
+  @media (display-mode: standalone) {
+    body{ padding:0; display:block; background:var(--paper); }
+    .device{
+      width:100%; max-width:none; min-height:100vh; min-height:100dvh;
+      border:none; border-radius:0; box-shadow:none;
+    }
+    .statusbar{ display:none; }
+    header.app-header{ padding-top:calc(env(safe-area-inset-top) + 14px); }
+    header.app-header .signout-btn{ top:calc(env(safe-area-inset-top) + 12px); }
+    .connect-screen{ min-height:100vh; min-height:100dvh; padding-top:calc(env(safe-area-inset-top) + 40px); }
+    nav.bottom-nav{ padding-bottom:calc(14px + env(safe-area-inset-bottom)); }
+  }
+
   /* ---------- Connect screen ---------- */
   .connect-screen{
     padding:40px 26px; text-align:center; color:var(--paper);
